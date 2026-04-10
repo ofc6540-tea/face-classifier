@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>실시간 얼굴 인식 (유화 & 상범이)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    <style>
+        /* 웹캠 캔버스에 라운드 스타일 적용 */
+        #webcam-container canvas {
+            border-radius: 0.75rem; /* Tailwind rounded-xl */
+            width: 100% !important;
+            height: auto !important;
+            aspect-ratio: 1 / 1;
+            object-fit: cover;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800 font-sans antialiased">
+
+    <div class="max-w-lg mx-auto p-4 py-8 sm:py-12">
+        <!-- 헤더 영역 -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">얼굴 분류기</h1>
+            <p class="text-gray-500">카메라를 통해 유화, 상범이, 배경, 같이 있는 모습을 실시간으로 분류합니다.</p>
+        </header>
+
+        <!-- 메인 컨텐츠 영역 -->
+        <main class="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 p-6">
+            
+            <!-- 웹캠 화면 영역 -->
+            <div id="webcam-wrapper" class="relative w-full aspect-square bg-gray-100 rounded-xl flex items-center justify-center mb-6 border-2 border-dashed border-gray-300">
+                <div id="placeholder" class="text-center text-gray-400">
+                    <svg class="mx-auto h-12 w-12 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    <p>카메라를 켜주세요</p>
+                </div>
+                <div id="webcam-container" class="absolute inset-0 w-full h-full hidden"></div>
+            </div>
+
+            <!-- 컨트롤 버튼 -->
+            <button id="start-btn" onclick="init()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-xl transition duration-200 ease-in-out shadow-md mb-6 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">
+                시작하기
+            </button>
+
+            <!-- 결과 표시 영역 (막대 그래프) -->
+            <div id="label-container" class="space-y-4 hidden">
+                <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">분류 결과</h3>
+                <!-- 결과 막대들은 자바스크립트를 통해 이곳에 생성됩니다. -->
+            </div>
+            
+            <div id="loading-message" class="text-center text-blue-600 font-medium hidden">
+                모델과 카메라를 불러오는 중입니다...
+            </div>
+        </main>
+    </div>
+
+    <script type="text/javascript">
+        // Teachable Machine에서 내보낸 모델 링크
+        const URL = "https://teachablemachine.withgoogle.com/models/2du4WPO5Y/";
+
+        let model, webcam, labelContainer, maxPredictions;
+        let isPlaying = false;
+
+        // 색상 팔레트 (각 클래스별 다른 색상 적용)
+        const colors = ['bg-indigo-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500'];
+
+        async function init() {
+            if (isPlaying) return;
+
+            const startBtn = document.getElementById('start-btn');
+            const loadingMsg = document.getElementById('loading-message');
+            const placeholder = document.getElementById('placeholder');
+            const webcamWrapper = document.getElementById('webcam-wrapper');
+            const webcamContainer = document.getElementById('webcam-container');
+            
+            // UI 상태 변경 (로딩 중)
+            startBtn.classList.add('hidden');
+            loadingMsg.classList.remove('hidden');
+
+            const modelURL = URL + "model.json";
+            const metadataURL = URL + "metadata.json";
+
+            try {
+                // 모델 및 메타데이터 로드
+                model = await tmImage.load(modelURL, metadataURL);
+                maxPredictions = model.getTotalClasses();
+
+                // 웹캠 설정 (모바일 환경 등을 고려해 해상도를 약간 높임)
+                const flip = true; 
+                webcam = new tmImage.Webcam(400, 400, flip);
+                await webcam.setup({ facingMode: "user" }); // 전면 카메라 우선 요청
+                await webcam.play();
+                window.requestAnimationFrame(loop);
+
+                isPlaying = true;
+
+                // UI 상태 변경 (웹캠 표시)
+                loadingMsg.classList.add('hidden');
+                placeholder.classList.add('hidden');
+                webcamWrapper.classList.remove('border-2', 'border-dashed'); // 테두리 제거
+                webcamContainer.classList.remove('hidden');
+                webcamContainer.appendChild(webcam.canvas);
+
+                // 결과 라벨 컨테이너 초기화
+                labelContainer = document.getElementById("label-container");
+                labelContainer.classList.remove('hidden');
+                
+                // 각 클래스별 프로그레스 바 UI 생성
+                for (let i = 0; i < maxPredictions; i++) {
+                    const colorClass = colors[i % colors.length]; // 색상 순환 배정
+                    const labelDiv = document.createElement("div");
+                    labelDiv.className = "prediction-row";
+                    labelDiv.innerHTML = `
+                        <div class="flex justify-between items-end mb-1">
+                            <span class="text-sm font-medium text-gray-700" id="class-name-${i}">Class</span>
+                            <span class="text-sm font-bold text-gray-900" id="class-prob-${i}">0%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                            <div class="${colorClass} h-3 rounded-full transition-all duration-150 ease-out" id="class-bar-${i}" style="width: 0%"></div>
+                        </div>
+                    `;
+                    labelContainer.appendChild(labelDiv);
+                }
+            } catch (error) {
+                console.error("초기화 오류:", error);
+                loadingMsg.classList.add('hidden');
+                startBtn.classList.remove('hidden');
+                startBtn.innerText = "오류 발생! 다시 시도 (카메라 권한 확인)";
+                startBtn.classList.replace('bg-blue-600', 'bg-red-500');
+                startBtn.classList.replace('hover:bg-blue-700', 'hover:bg-red-600');
+            }
+        }
+
+        async function loop() {
+            webcam.update(); // 웹캠 프레임 업데이트
+            await predict(); // 예측 실행
+            window.requestAnimationFrame(loop); // 반복
+        }
+
+        async function predict() {
+            // 웹캠 캔버스를 통해 예측 수행
+            const prediction = await model.predict(webcam.canvas);
+            
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = prediction[i].className;
+                const probability = (prediction[i].probability * 100).toFixed(0); // 확률을 백분율로 변환
+                
+                // 텍스트 업데이트
+                document.getElementById(`class-name-${i}`).innerText = className;
+                document.getElementById(`class-prob-${i}`).innerText = probability + "%";
+                
+                // 프로그레스 바 너비 업데이트
+                document.getElementById(`class-bar-${i}`).style.width = probability + "%";
+                
+                // 가장 높은 확률을 가진 항목 강조 효과 (옵션)
+                const row = document.getElementById(`class-name-${i}`).parentElement.parentElement;
+                if (probability > 60) {
+                    row.style.opacity = "1";
+                } else {
+                    row.style.opacity = "0.6";
+                }
+            }
+        }
+    </script>
+</body>
+</html>
